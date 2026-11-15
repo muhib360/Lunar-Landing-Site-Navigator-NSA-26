@@ -197,7 +197,7 @@ export default function App() {
       {mode !== 'expert' && (
         <div className="view-controls">
           {camera === 'orbit' ? (
-            <button className="big-btn" onClick={enterSurface}>
+            <button className="big-btn primary" onClick={enterSurface}>
               <span aria-hidden>🧑‍🚀</span> Stand here
             </button>
           ) : (
