@@ -80,6 +80,19 @@ export class SkySprites {
   constructor(scene: Cesium.Scene) {
     this.scene = scene;
     const coll = scene.primitives.add(new Cesium.BillboardCollection({ scene })) as Cesium.BillboardCollection;
+    // Cesium hides objects it thinks are behind the Moon using a sphere at the lowest terrain height.
+    // When you stand at a site below the Moon's reference radius (e.g. Apollo 11, 1.9 km below), that
+    // test wrongly hides the whole sky. Turn it off for these two sprites only: real mountains still
+    // hide them through the normal depth test. (_colorCommands is internal to Cesium 1.147.)
+    const internal = coll as unknown as {
+      update(frameState: unknown): void;
+      _colorCommands?: { occlude: boolean }[];
+    };
+    const update = internal.update.bind(coll);
+    internal.update = (frameState) => {
+      update(frameState);
+      for (const c of internal._colorCommands ?? []) c.occlude = false;
+    };
     this.sun = coll.add({ image: sunImage(), show: false, position: Cesium.Cartesian3.ZERO });
     this.earth = coll.add({ image: earthImage(0.5), show: false, position: Cesium.Cartesian3.ZERO });
   }

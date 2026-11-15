@@ -69,6 +69,7 @@ export interface NowStatus {
   sunText: string;
   earthUp: boolean;
   earthHeight: number;
+  earthEl: number;
   earthAz: number;
   earthText: string;
   powerPct: number; // vertical sun-tracking panel, % of full sunlight
@@ -103,6 +104,7 @@ export function nowStatus(tr: Track, t: number): NowStatus {
     sunText,
     earthUp,
     earthHeight,
+    earthEl: tr.earthEl[i],
     earthAz: tr.earthAz[i],
     earthText,
     // Share of full sunlight on an upright panel facing the Sun: visible disk × cos(Sun height).

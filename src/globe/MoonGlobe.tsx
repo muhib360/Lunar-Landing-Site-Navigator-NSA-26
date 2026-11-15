@@ -31,8 +31,8 @@ interface Props {
   /** Change `key` to fly the camera to this point. */
   focus: { lat: number; lon: number; key: string } | null;
   mode: CameraMode;
-  /** Site to stand at in surface mode, and the initial look direction (deg from north). */
-  surface: { lat: number; lon: number; lookAz: number; key: string } | null;
+  /** Site to stand at in surface mode, and where to look: azimuth (deg from north) and elevation (deg). */
+  surface: { lat: number; lon: number; lookAz: number; lookEl: number; key: string } | null;
   eyeHeightM?: number;
   onPickPin: (id: string) => void;
   onPickPoint: (lat: number, lon: number) => void;
@@ -40,6 +40,9 @@ interface Props {
 }
 
 const base = import.meta.env.BASE_URL;
+// Look-around limits in surface mode: a little below the horizon up to almost straight overhead.
+const MIN_PITCH = Cesium.Math.toRadians(-60);
+const MAX_PITCH = Cesium.Math.toRadians(89);
 Cesium.Ellipsoid.default = Cesium.Ellipsoid.MOON;
 Cesium.Ion.defaultAccessToken = ''; // offline: never call Cesium ion
 
@@ -48,7 +51,7 @@ export function MoonGlobe(p: Props) {
   const viewerRef = useRef<Cesium.Viewer | null>(null);
   const skyRef = useRef<SkySprites | null>(null);
   const look = useRef({ heading: 0, pitch: Cesium.Math.toRadians(4) });
-  const surfaceGround = useRef<{ key: string; h: number } | null>(null);
+  const surfaceGround = useRef<{ key: string; h: number; exact: boolean } | null>(null);
   const flying = useRef(false);
   const [pinHeights, setPinHeights] = useState<Float64Array | null>(null);
   const props = useRef(p);
@@ -193,7 +196,7 @@ export function MoonGlobe(p: Props) {
       if (!drag || props.current.mode !== 'surface') return;
       const k = ((viewer.camera.frustum as Cesium.PerspectiveFrustum).fov ?? 1) / scene.canvas.clientWidth;
       look.current.heading -= (e.endPosition.x - drag.x) * k;
-      look.current.pitch = Cesium.Math.clamp(look.current.pitch + (e.endPosition.y - drag.y) * k, -1.2, 1.2);
+      look.current.pitch = Cesium.Math.clamp(look.current.pitch + (e.endPosition.y - drag.y) * k, MIN_PITCH, MAX_PITCH);
       drag = { x: e.endPosition.x, y: e.endPosition.y, moved: true };
       applySurfaceView();
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
@@ -213,19 +216,25 @@ export function MoonGlobe(p: Props) {
     if (!viewer || !s) return;
     const key = `${s.lat},${s.lon}`;
     if (surfaceGround.current?.key !== key) {
-      // Ask the terrain worker for the ground height, then place the camera.
-      surfaceGround.current = { key, h: NaN };
-      terrain()
-        .heights([[s.lat, s.lon]])
-        .then((h) => {
-          if (surfaceGround.current?.key !== key) return;
-          surfaceGround.current.h = h[0];
-          applySurfaceView();
-        });
+      // Ask the terrain worker for the ground height: a quick coarse value to place the camera at
+      // once, then the exact LOLA value (near the pole it needs the detailed file to finish loading).
+      surfaceGround.current = { key, h: NaN, exact: false };
+      const set = (exact: boolean) => (h: Float64Array) => {
+        const g = surfaceGround.current;
+        if (g?.key !== key || (g.exact && !exact)) return;
+        g.h = h[0];
+        g.exact = exact;
+        applySurfaceView();
+      };
+      terrain().heights([[s.lat, s.lon]], false).then(set(false));
+      terrain().heights([[s.lat, s.lon]], true).then(set(true));
       return;
     }
-    const ground = surfaceGround.current.h;
-    if (Number.isNaN(ground) || viewerRef.current !== viewer) return;
+    const ground = surfaceGround.current.h; // exact LOLA height from the terrain worker
+    if (Number.isNaN(ground) || viewerRef.current !== viewer || props.current.mode !== 'surface') return;
+    // A fly-in still running (e.g. the opening one) would otherwise override this view.
+    viewer.camera.cancelFlight();
+    flying.current = false;
     viewer.camera.setView({
       destination: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, ground + (props.current.eyeHeightM ?? 12), Cesium.Ellipsoid.MOON),
       orientation: { heading: look.current.heading, pitch: look.current.pitch, roll: 0 },
@@ -245,7 +254,12 @@ export function MoonGlobe(p: Props) {
     const frustum = viewer.camera.frustum as Cesium.PerspectiveFrustum;
     frustum.fov = Cesium.Math.toRadians(surface ? 75 : 60);
     if (surface) {
-      look.current = { heading: Cesium.Math.toRadians(p.surface!.lookAz), pitch: Cesium.Math.toRadians(4) };
+      // Aim straight at the target: turn to its azimuth AND tilt to its elevation (it can be high in
+      // the sky away from the poles).
+      look.current = {
+        heading: Cesium.Math.toRadians(p.surface!.lookAz),
+        pitch: Cesium.Math.clamp(Cesium.Math.toRadians(p.surface!.lookEl), MIN_PITCH, MAX_PITCH),
+      };
       applySurfaceView();
     } else if (p.focus && document.documentElement.dataset.globe === 'ready') {
       flyTo(viewer, p.focus.lat, p.focus.lon, flying);

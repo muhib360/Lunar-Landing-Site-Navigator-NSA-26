@@ -36,9 +36,12 @@ class TerrainClient {
     return this.call<{ tile: TileMesh }>({ type: 'tile', west, south, east, north, level }).then((r) => r.tile);
   }
 
-  /** Terrain heights (m) for [lat, lon] pairs. */
-  heights(points: [number, number][]) {
-    return this.call<{ heights: Float64Array }>({ type: 'heights', points: points.flat() }).then((r) => r.heights);
+  /**
+   * Terrain heights (m) for [lat, lon] pairs. With detail = false the answer comes from the global
+   * map right away instead of waiting for the 13 MB south-pole file.
+   */
+  heights(points: [number, number][], detail = true) {
+    return this.call<{ heights: Float64Array }>({ type: 'heights', points: points.flat(), detail }).then((r) => r.heights);
   }
 
   horizon(lat: number, lon: number, mastM: number) {
