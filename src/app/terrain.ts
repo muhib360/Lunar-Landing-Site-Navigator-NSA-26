@@ -9,7 +9,9 @@ import { dataUrl, makeDemLoader } from './demLoader.ts';
 const PRECOMPUTED = precomputedJson as Record<string, { ground: number; mask: number[] }>;
 const PRECOMPUTED_MAST_M = 2;
 
-export const demsFor = makeDemLoader(dataUrl());
+/** One shared loader so the DEMs download once for the globe, horizons and search. */
+export const dems = makeDemLoader(dataUrl());
+export const demsFor = dems.demsFor;
 
 export const horizonKey = (lat: number, lon: number, mastM: number) =>
   `${lat.toFixed(5)},${lon.toFixed(5)},${mastM}`;
@@ -27,7 +29,7 @@ export function sphereHorizon(lat: number, lon: number, mastM: number): SiteHori
 }
 
 export async function computeSiteHorizon(lat: number, lon: number, mastM: number): Promise<SiteHorizon> {
-  const dems = await demsFor(lat);
-  const r = computeHorizon(lat, lon, dems, { mastM });
+  const list = await demsFor(lat);
+  const r = computeHorizon(lat, lon, list, { mastM });
   return { lat, lon, groundHeightKm: r.groundHeightKm, mask: r.mask };
 }

@@ -1,7 +1,14 @@
-// Shared DEM loader for the main thread and the search worker.
+// Shared DEM loader for the main thread, the 3D globe and the search worker.
 import { type Dem, globalDem, polarSouthDem } from '../core/dem.ts';
 
-export function makeDemLoader(dataUrl: string) {
+export interface DemLoader {
+  /** DEMs to use around a site, fine → coarse. */
+  demsFor(lat: number): Promise<Dem[]>;
+  polar(): Promise<Dem>;
+  global(): Promise<Dem>;
+}
+
+export function makeDemLoader(dataUrl: string): DemLoader {
   const fetchInt16 = async (file: string) => {
     const res = await fetch(new URL(file, dataUrl));
     if (!res.ok) throw new Error(`${file}: HTTP ${res.status}`);
@@ -9,15 +16,17 @@ export function makeDemLoader(dataUrl: string) {
   };
   let polarP: Promise<Dem> | null = null;
   let globalP: Promise<Dem> | null = null;
-  const loadPolar = () => (polarP ??= fetchInt16('polar240.bin').then((d) => polarSouthDem(d, 3812, 0.24, -75)));
-  const loadGlobal = () => (globalP ??= fetchInt16('global8.bin').then((d) => globalDem(d, 8)));
-
-  /** DEMs to use around a site, fine → coarse. */
-  return async function demsFor(lat: number): Promise<Dem[]> {
-    const dems: Dem[] = [];
-    if (lat <= -74) dems.push(await loadPolar());
-    dems.push(await loadGlobal());
-    return dems;
+  const polar = () => (polarP ??= fetchInt16('polar240.bin').then((d) => polarSouthDem(d, 3812, 0.24, -75)));
+  const global = () => (globalP ??= fetchInt16('global8.bin').then((d) => globalDem(d, 8)));
+  return {
+    polar,
+    global,
+    async demsFor(lat) {
+      const dems: Dem[] = [];
+      if (lat <= -74) dems.push(await polar());
+      dems.push(await global());
+      return dems;
+    },
   };
 }
 

@@ -1,85 +1,138 @@
-# Lunar Landing Site Navigator — Plan
+# Lunar Landing Site Navigator — Plan v2
 
 NASA Space Apps 2026 challenge: <https://www.spaceappschallenge.org/2026/challenges/lunar-landing-site-navigator>
 
-**Goal:** a fast, friendly web app for comparing lunar landing **sites** and **dates**. It shows where the
-**Sun** and **Earth** sit relative to the **local horizon**, so a user can judge solar power and
-direct‑to‑Earth (DTE) communication windows in seconds instead of juggling Quickmap, Moon Trek and
-Horizons.
+> **Status:** approved 2026‑11‑15; first build done on branch `v2-cesium-moon` (globe, stand-here, three levels, tour). v1 (a working 2D dashboard, commit `3955765`) proved the science.
+> v2 rebuilds the experience around a real 3D Moon, with three levels of detail for three kinds of user.
+> **Deadline:** about 12 hours from 2026‑11‑15, team project, so the code must stay simple to work on.
 
-## Who it is for
+## The one question the app answers
 
-| User | What they need |
+> **"If we land *here*, on *this date*, will we have sunlight for power, and can we talk to Earth?"**
+
+Every screen answers that first, in plain words, and shows detail only on request.
+
+## What changes from v1
+
+| Keep (works, invisible to users) | Replace (what people see) |
 |---|---|
-| Mission planner | "The launch slipped 9 days. Is the site still viable? Is a site 5 km away better?" Exact numbers, events, and side‑by‑side comparison. |
-| Educator / public | "Why is the south pole so hard?" A sky view that makes the low Sun, the wobbling Earth and the terrain shadows obvious. |
+| Sun/Earth position engine, validated vs JPL Horizons (≤ 0.003°) | The 2D dashboard layout |
+| LOLA terrain horizons, catalog sites, nearby‑spot search (Web Worker) | The 360° graph as the main view |
+| Data scripts, share links | The map → a 3D globe |
 
-## Key design decisions
+## The experience
 
-1. **Static web app, all computation in the browser.** No backend and no API calls at runtime, so it
-   is instant, works offline, and deploys to GitHub Pages. Stack: Vite + React + TypeScript, plain
-   SVG/Canvas charts (no heavy chart library).
-2. **Ephemeris from [astronomy-engine](https://github.com/cosinekitty/astronomy)** (MIT, pure JS).
-   Geocentric Sun and Moon vectors plus the IAU Moon orientation model give Sun and Earth directions
-   in the Moon body‑fixed frame. Topocentric parallax is included (it moves Earth by up to ~0.26°).
-   **Validated against JPL Horizons** (`coord@301` topocentric observer), with a target error < 0.05°.
-3. **Real terrain horizons from LOLA.** The bare-sphere horizon is wrong at the pole, where the Sun
-   peaks at about 1.5° and nearby massifs block it. Horizon masks are 720 azimuths (0.5°) computed by
-   ray‑marching a LOLA DEM with lunar curvature included:
-   - South polar region (lat < −75°): `LDEM_75S_240M` (240 m/px polar stereographic, 29 MB).
-   - Elsewhere: `LDEM_16` (16 px/deg ≈ 1.9 km), downsampled for the browser.
-   - Curated sites: masks are **precomputed** at build time and shipped as JSON.
-   - Custom sites: masks are computed **in a Web Worker** from the shipped DEM, using the same code.
-4. **One shared TypeScript core** (`src/core/`) that runs in both the browser and Node (Node 24 strips
-   types natively). Build scripts and validation reuse exactly the code the app runs.
-5. **Honest data.** Every catalog site carries a source. Artemis III regions are marked approximate,
-   because NASA has published region names, not points.
+### 1. A 3D Moon you can explore (CesiumJS, offline, no account)
 
-## Metrics per scenario (site + date window)
+- A full-screen globe drawn by **CesiumJS**, which is open source and runs fully offline. We supply
+  the Moon ourselves from free NASA data that ships with the app:
+  - **Surface photos:** NASA SVS *CGI Moon Kit* LROC colour map
+    (<https://svs.gsfc.nasa.gov/4720>), cut into map tiles.
+  - **Terrain shape:** the LOLA height maps we already use: 240 m around the south pole and about
+    3.8 km elsewhere. Cesium reads them through its built-in `CustomHeightmapTerrainProvider`.
+- **No account, no token, no internet needed at the demo.**
+- **Optional sharper view:** if someone later adds a free Cesium ion token, the app can switch to
+  Cesium's hosted *Cesium Moon* tiles (5 m terrain, 1 m photos at the pole). This is a bonus,
+  never required.
+- Landing sites appear as pins. Clicking one **flies the camera down** to it.
+- **"Stand here"** puts you on the surface at eye level, looking around: real mountains, the Sun
+  skimming the ridges, and Earth in the sky. The lighting comes from our validated Sun position,
+  so shadows fall where they really would.
+- **Time slider** at the bottom, like a video player: drag or press play to watch a month go by.
+  The Sun slips behind a mountain and the scene goes dark; Earth dips behind a ridge and a
+  "no signal" icon appears.
 
-- Sun: elevation above the terrain horizon, visible fraction of the solar disk, time until the next
-  sunset or sunrise, % of the window sunlit, longest continuous sunlight, **longest night**
-  (drives battery and heater sizing), and incident flux on a vertical sun‑tracking array and on a
-  horizontal panel.
-- Earth: elevation above the terrain horizon, time until the next Earthset or Earthrise, % of the
-  window visible, and Earth phase as seen from the Moon.
-- Combined: % of the window with **both** power and DTE comms.
-- Events list: sunrise/sunset and Earthrise/Earthset times, refined by bisection to under a minute.
+### 2. Three levels in one app
 
-## UI
+A switch at the top changes how much detail you see. Underneath it's the same Moon and the same numbers.
 
-- **Scenarios panel (A–D, colour‑coded):** site picker (Apollo, robotic landers, CLPS, Artemis III
-  regions, custom lat/lon), date/time, quick shifts (±1 day, ±1 lunation), duplicate.
-- **Sky panorama:** 360° strip with the terrain silhouette, Sun and Earth disks drawn to scale, and
-  their tracks over the window. This view explains the south pole at a glance.
-- **Timeline:** per‑scenario bands for sunlight and Earth visibility, a Sun/Earth elevation curve,
-  a shared scrubber and a play button to animate.
-- **Comparison table:** all metrics side by side, with the best value highlighted.
-- **Map:** south polar hillshade (and a global map) with site markers. Click to drop a custom site.
-- **"Why?" explainers:** short notes for the public on the low Sun, libration, and permanent shadow.
+| Level | For | What you see |
+|---|---|---|
+| **Explore** (default) | Public, students, beginners | Globe, "stand here" and the time slider. A plain-English **answer card**: ☀️ Sunlight *Good — up 59% of the month* · 📡 Earth *In view, except 3 days behind a ridge* · 🌙 Longest night *14 days — batteries must last*. Green/amber/red ratings. A **guided tour** (4–5 steps): "Why the south pole?", "Why the Sun stays low", "Why Earth wobbles", "Why mountains matter". |
+| **Compare** | Teachers, curious users, quick what‑ifs | Two to four site/date **cards** side by side with simple bars. A **calendar strip** of good and bad days ("launch slipped a week — still OK?"). A **"Find a sunnier spot nearby"** button (v1 search) that drops pins on the globe. |
+| **Expert** | Mission planners, judges | v1's graphs, exact numbers, a sunrise/sunset/Earthrise/Earthset event list, settings (mast height, comms margin) and a CSV download. |
 
-## Phases
+- **ⓘ glossary tips** on every technical word (elevation, azimuth, libration, terminator).
+- **Plain labels:** "Earth in view", not "DTE comms". "Sun height", not "solar elevation", except in Expert.
 
-1. **Core + MVP**: ephemeris core, Horizons validation, site catalog, scenarios, sky panorama,
-   timeline, comparison table. Smooth‑sphere horizon as a fallback.
-2. **Terrain**: download and convert LOLA data, horizon ray‑marcher, precomputed masks, worker for
-   custom sites, hillshade maps.
-3. **Polish / stretch**: "best‑lit spot within N km" search, a 3D terrain view (three.js), shareable
-   URLs, and a mobile layout.
+### 3. Look and feel
+
+- The 3D scene **fills the screen**. The controls float over it as see-through ("glass") panels, like
+  a mission display.
+- One characterful font for headings, a clean one for text, and three colours that carry meaning:
+  lunar grey, **sun gold** and **Earth blue**.
+- Answer first, explanation second; icons over paragraphs.
+- Works on a laptop and at phone width; on a phone the globe stays on top and the panels stack below.
+
+## Technical approach (kept simple for the team)
+
+- **Stack:** Vite + React + TypeScript (unchanged) + **CesiumJS 1.147**, used directly through one
+  wrapper component. No extra wrapper library: one fewer thing to learn.
+- **Cesium setup (offline):** `Ellipsoid.default = Ellipsoid.MOON`. Cesium ion is switched off
+  entirely (no default token, no online imagery or geocoder). Earth-only features are turned off
+  (atmosphere, Earth sun/moon). Lighting is a `DirectionalLight` aimed from our ephemeris. Sun and
+  Earth in the sky are sprites placed along the computed directions; Earth's sprite shows its phase.
+- **Moon data (prepared once by a script, then shipped):**
+  - Photos: the CGI Moon Kit 8k colour map, cut into a small tile pyramid.
+  - Polar close-up: our LOLA south-pole shading, with photos if time allows.
+  - Terrain: our existing `polar240.bin` and `global8.bin` through `CustomHeightmapTerrainProvider`.
+- **Optional online mode:** if `VITE_CESIUM_ION_TOKEN` is set in `.env.local` (never committed),
+  the app uses the hosted Cesium Moon tileset instead. Without it, everything still works.
+- **Numbers stay ours:** the answer cards and charts use the validated engine and LOLA horizons,
+  never the 3D view, so the numbers are identical on every machine.
+
+```
+src/
+  core/      engine — unchanged (ephemeris, horizons, timeline, search, sites)
+  app/       state, terrain loading, search worker — unchanged
+  globe/     NEW: MoonGlobe.tsx (Cesium wrapper), sky.ts (Sun/Earth sprites), lighting.ts, pins.ts
+  ui/        NEW: ModeSwitch, AnswerCard, TimeSlider, GlossaryTip, Tour, Panel
+  modes/     NEW: Explore.tsx, Compare.tsx, Expert.tsx (Expert reuses v1 components)
+```
+
+Each mode is one file built from shared pieces, so teammates can work on different modes without
+editing the same files.
+
+## Timeline (≈12 h)
+
+| Hours | Who | Work | Checkpoint |
+|---|---|---|---|
+| 0–1.5 | Claude | Cesium installed offline; NASA photo tiles + LOLA terrain on the globe; pins; fly‑to | You see the 3D Moon |
+| 1.5–3.5 | Claude | "Stand here" camera, Sun lighting from our engine, Sun/Earth sprites, time slider | **Show you: the key moment** |
+| 3.5–5.5 | Claude | Explore mode: answer card, ratings, glossary tips, mode switch, glass styling | Beginner flow complete |
+| 5.5–7.5 | Claude + team | Compare mode cards, calendar strip, nearby search on the globe; Expert mode re‑homes v1 | All three levels work |
+| 7.5–9.5 | Team (content) + Claude | Guided tour text, phone layout, performance pass, README | Feature freeze |
+| 9.5–12 | Team | Demo video, Space Apps project page and submission; Claude fixes bugs | **Submitted with buffer** |
+
+If time runs short, drop features from the bottom up: CSV download, then the calendar strip, then
+the guided tour. **Never** cut the globe, "stand here" or Explore mode.
+
+## Tasks for teammates (no 3D knowledge needed)
+
+- Guided tour and glossary text: plain words, 1–2 sentences each (`src/ui/Tour.tsx`, `src/ui/glossary.ts`).
+- Check the catalog sites and add Artemis III regions with sourced coordinates (`src/core/sites.ts`).
+- Demo script and video; the Space Apps submission page.
+- Test on their own laptops and phones and report what is confusing.
+
+## Risks and how we handle them
+
+| Risk | Mitigation |
+|---|---|
+| Offline terrain is coarser (240 m at the pole, ~3.8 km elsewhere) than Cesium's hosted 5 m tiles | Fine for mountains and crater walls, which are what block the Sun. Close-ups look softer. The optional token mode gives sharp close-ups if wanted. |
+| The app download gets bigger (photo tiles add ~20–40 MB) | Tiles load on demand as you zoom; only what you look at is downloaded. |
+| Cesium is large (several MB) and needs a decent GPU | Load the globe first and the rest after; test on the weakest team laptop. |
+| A forum user reports Cesium Moon heights ~2.5 km off vs LOLA (optional online mode only) | Offline mode uses our own LOLA heights, so it is consistent. In online mode, pins and the camera are placed on the tileset's surface. |
+| Terrain shadows in Cesium can flicker at low Sun angles | Tune shadow settings early (hour 2). If they stay bad, rely on lighting plus our horizon line drawn in the scene. |
+
+## Needed from you before building
+
+1. **Approval of this plan.** No account or token is needed.
 
 ## Data sources
 
-- LOLA GDR DEMs: <https://imbrium.mit.edu/DATA/LOLA_GDR/> (`POLAR/IMG/LDEM_75S_240M`,
-  `CYLINDRICAL/IMG/LDEM_16`, `LDEM_4`).
-- Landing sites: NASA NSSDC lunar artifact table
-  <https://nssdc.gsfc.nasa.gov/planetary/lunar/lunar_artifact_impacts.html>; IM‑2 from LROC / public
-  reports; Nobile Rim 2 from arXiv:2406.19863.
-- Validation: JPL Horizons API <https://ssd.jpl.nasa.gov/api/horizons.api>.
-
-## Known limitations (to state in the demo)
-
-- 240 m terrain misses boulders and small ridges. Near-field shadows at the metre scale need the
-  5–20 m products, which are too large for a browser.
-- The horizon assumes an observer height (default 2 m, adjustable). Panels on a mast see further.
-- Ephemeris accuracy is about 0.01°. This is irrelevant next to terrain uncertainty, but it is
-  documented and validated.
+- NASA SVS CGI Moon Kit (LROC colour map, public domain): <https://svs.gsfc.nasa.gov/4720>.
+- Optional online mode: Cesium Moon 3D Tiles (Cesium ion asset 2684829),
+  <https://cesium.com/platform/cesium-ion/content/cesium-moon/>.
+- LOLA GDR DEMs for our horizon calculations: <https://imbrium.mit.edu/DATA/LOLA_GDR/>.
+- Landing sites: NASA NSSDC lunar artifact table and published sources (see `src/core/sites.ts`).
+- Validation: JPL Horizons API.

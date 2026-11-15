@@ -18,7 +18,7 @@ self.onmessage = async (e: MessageEvent<SearchRequest>) => {
   const post = (m: SearchMessage) => (self as unknown as Worker).postMessage(m);
   try {
     loader ??= makeDemLoader(msg.dataUrl);
-    const dems = await loader(lat);
+    const dems = await loader.demsFor(lat);
     const pts = gridAround(lat, lon, opts.radiusKm, opts.spacingKm);
     const out: Candidate[] = [];
     for (let i = 0; i < pts.length; i++) {

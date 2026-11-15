@@ -25,3 +25,4 @@ dist-ssr
 
 # LOLA raw downloads (large)
 data/raw/
+public/cesium/
