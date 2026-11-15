@@ -8,7 +8,9 @@ import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { useEffect, useRef, useState } from 'react';
 import { moonFrame } from '../core/ephemeris.ts';
+import { createBoulderField } from './boulders.ts';
 import { createLolaTerrain } from './lolaTerrain.ts';
+import { regolithProvider } from './regolith.ts';
 import { SkySprites } from './sky.ts';
 import { terrain } from './terrainClient.ts';
 
@@ -53,6 +55,7 @@ export function MoonGlobe(p: Props) {
   const look = useRef({ heading: 0, pitch: Cesium.Math.toRadians(4) });
   const surfaceGround = useRef<{ key: string; h: number; exact: boolean } | null>(null);
   const flying = useRef(false);
+  const boulders = useRef<{ key: string; prim: Cesium.Primitive | null } | null>(null);
   const [pinHeights, setPinHeights] = useState<Float64Array | null>(null);
   const props = useRef(p);
   useEffect(() => {
@@ -85,6 +88,8 @@ export function MoonGlobe(p: Props) {
       infoBox: false,
       selectionIndicator: false,
       skyAtmosphere: false,
+      // Cesium only adds stars automatically for Earth; use its Tycho star catalogue here too.
+      skyBox: Cesium.SkyBox.createEarthSkyBox(),
       scene3DOnly: true,
       // Shadow maps are expensive: they are switched on only in "stand here" (see camera effect).
       shadows: false,
@@ -123,6 +128,8 @@ export function MoonGlobe(p: Props) {
     // The 8k photo map smears near the pole (1.3 km pixels stretched around it). Fade it into a
     // neutral grey there so the sharp LOLA terrain shading carries the detail instead.
     viewer.imageryLayers.add(new Cesium.ImageryLayer(polarFadeProvider()));
+    // Fine regolith grain, shown only close to the ground (terrain tiles of level 11+, ≲3 km across).
+    viewer.imageryLayers.add(new Cesium.ImageryLayer(regolithProvider(), { minimumTerrainLevel: 11, alpha: 0.9 }));
 
     skyRef.current = new SkySprites(scene);
     scene.preRender.addEventListener(() => skyRef.current?.update());
@@ -253,6 +260,7 @@ export function MoonGlobe(p: Props) {
     viewer.shadows = !!surface;
     const frustum = viewer.camera.frustum as Cesium.PerspectiveFrustum;
     frustum.fov = Cesium.Math.toRadians(surface ? 75 : 60);
+    updateBoulders(viewer, surface ? `${p.surface!.lat},${p.surface!.lon}` : null);
     if (surface) {
       // Aim straight at the target: turn to its azimuth AND tilt to its elevation (it can be high in
       // the sky away from the poles).
@@ -267,6 +275,20 @@ export function MoonGlobe(p: Props) {
     viewer.scene.requestRender();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.mode, p.surface?.key]);
+
+  /** Rocks around the observer exist only while standing on the surface. */
+  function updateBoulders(viewer: Cesium.Viewer, key: string | null) {
+    if (boulders.current?.key === key) return;
+    if (boulders.current?.prim) viewer.scene.primitives.remove(boulders.current.prim);
+    boulders.current = key ? { key, prim: null } : null;
+    if (!key) return;
+    const [lat, lon] = key.split(',').map(Number);
+    createBoulderField(lat, lon).then((prim) => {
+      if (boulders.current?.key !== key || viewerRef.current !== viewer) return;
+      boulders.current.prim = viewer.scene.primitives.add(prim);
+      viewer.scene.requestRender();
+    });
+  }
 
   // ---- fly to focus ----
   useEffect(() => {
@@ -373,8 +395,9 @@ function polarFadeProvider() {
   const top = -74, bottom = -90; // canvas covers this latitude range
   const y = (lat: number) => ((top - lat) / (top - bottom)) * 256;
   const grad = g.createLinearGradient(0, y(-76), 0, y(-81));
-  grad.addColorStop(0, 'rgba(128,126,122,0)');
-  grad.addColorStop(1, 'rgba(128,126,122,0.92)');
+  // A slightly warm grey, like regolith in lander photos, rather than a neutral one.
+  grad.addColorStop(0, 'rgba(138,130,120,0)');
+  grad.addColorStop(1, 'rgba(138,130,120,0.92)');
   g.fillStyle = grad;
   g.fillRect(0, 0, 4, 256);
   return new Cesium.SingleTileImageryProvider({
