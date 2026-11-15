@@ -6,6 +6,7 @@ import type { MoonFrame } from '../core/ephemeris.ts';
 import { EARTH_RADIUS_KM, SUN_RADIUS_KM } from '../core/ephemeris.ts';
 
 const SPRITE_DIST_M = 2_000_000;
+const PHASE_STEPS = 24;
 const SUN_CORE_FRACTION = 0.18; // the solar disk's share of the sprite image width
 
 function sunImage(): HTMLCanvasElement {
@@ -85,9 +86,12 @@ export class SkySprites {
 
   setFrame(f: MoonFrame) {
     this.frame = f;
-    if (Math.abs(f.earthPhase - this.lastPhase) > 0.01) {
-      this.earth.image = earthImage(f.earthPhase) as unknown as string;
-      this.lastPhase = f.earthPhase;
+    // Earth's phase is drawn in 24 steps and each step's image is cached by id, so playback
+    // reuses textures instead of uploading a new one every frame.
+    const step = Math.round(f.earthPhase * PHASE_STEPS);
+    if (step !== this.lastPhase) {
+      this.lastPhase = step;
+      this.earth.setImage(`earth-phase-${step}`, earthImage(step / PHASE_STEPS));
     }
   }
 

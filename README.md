@@ -41,6 +41,12 @@ src/components v1 charts used by Expert mode
 
 All computation runs client‑side: no server, no API keys, works offline once loaded.
 
+**Performance design:** the panels and answer card appear first (~150 KB of app code); the 3D engine
+loads after them. Terrain data is compressed (`*.lola`, 19 MB total) and downloads in the background:
+the coarse global map first, then the detailed south pole. A Web Worker (`src/globe/terrain.worker.ts`)
+turns it into 3D tiles and computes horizons, so the screen never freezes. Shadows are only drawn in
+"Stand here".
+
 ## Run it
 
 ```bash

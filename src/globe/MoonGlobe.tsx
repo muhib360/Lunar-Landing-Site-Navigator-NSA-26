@@ -7,10 +7,10 @@
 import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { useEffect, useRef, useState } from 'react';
-import { dems as demLoader } from '../app/terrain.ts';
 import { moonFrame } from '../core/ephemeris.ts';
-import { type LolaDems, createLolaTerrain, heightM } from './lolaTerrain.ts';
+import { createLolaTerrain } from './lolaTerrain.ts';
 import { SkySprites } from './sky.ts';
+import { terrain } from './terrainClient.ts';
 
 export interface GlobePin {
   id: string;
@@ -47,9 +47,9 @@ export function MoonGlobe(p: Props) {
   const el = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Cesium.Viewer | null>(null);
   const skyRef = useRef<SkySprites | null>(null);
-  const demsRef = useRef<LolaDems | null>(null);
   const look = useRef({ heading: 0, pitch: Cesium.Math.toRadians(4) });
-  const [terrainVersion, setTerrainVersion] = useState(0);
+  const surfaceGround = useRef<{ key: string; h: number } | null>(null);
+  const [pinHeights, setPinHeights] = useState<Float64Array | null>(null);
   const props = useRef(p);
   useEffect(() => {
     props.current = p;
@@ -67,7 +67,9 @@ export function MoonGlobe(p: Props) {
     const viewer = new Cesium.Viewer(el.current!, {
       globe: new Cesium.Globe(ellipsoid),
       baseLayer: new Cesium.ImageryLayer(imagery),
-      terrainProvider: new Cesium.EllipsoidTerrainProvider({ ellipsoid }),
+      // One terrain source for the whole session: tiles are built in a worker and refine as the
+      // detailed south-pole data finishes downloading (no reload of the whole globe).
+      terrainProvider: createLolaTerrain(() => viewerRef.current?.scene.requestRender()),
       baseLayerPicker: false,
       geocoder: false,
       homeButton: false,
@@ -80,31 +82,36 @@ export function MoonGlobe(p: Props) {
       selectionIndicator: false,
       skyAtmosphere: false,
       scene3DOnly: true,
-      shadows: true,
+      // Shadow maps are expensive: they are switched on only in "stand here" (see camera effect).
+      shadows: false,
       terrainShadows: Cesium.ShadowMode.ENABLED,
       requestRenderMode: true,
+      msaaSamples: 1, // cheap FXAA (below) instead of 4× multisampling
       maximumRenderTimeChange: Infinity,
     });
     viewerRef.current = viewer;
-    if (import.meta.env.DEV) (window as unknown as { __viewer: Cesium.Viewer }).__viewer = viewer; // for debugging
+    (window as unknown as { __viewer: Cesium.Viewer }).__viewer = viewer; // handy for debugging in the console
     const scene = viewer.scene;
     scene.backgroundColor = Cesium.Color.BLACK;
     if (scene.sun) scene.sun.show = false;
     if (scene.moon) scene.moon.show = false;
     scene.fog.enabled = false;
+    scene.postProcessStages.fxaa.enabled = true;
     const globe = scene.globe;
     globe.enableLighting = true;
     globe.dynamicAtmosphereLighting = false;
     globe.showGroundAtmosphere = false;
     globe.baseColor = Cesium.Color.fromCssColorString('#3a3a3a');
-    globe.maximumScreenSpaceError = 1.5;
+    globe.maximumScreenSpaceError = 2;
+    globe.preloadSiblings = false;
+    globe.tileCacheSize = 300;
     globe.vertexShadowDarkness = 0.45;
     globe.lambertDiffuseMultiplier = 1.25;
     globe.depthTestAgainstTerrain = true;
     const sm = scene.shadowMap;
     sm.maximumDistance = 60_000;
-    sm.size = 4096;
-    sm.softShadows = true;
+    sm.size = 2048;
+    sm.softShadows = false;
     // Real lunar shadows are black; a little fill light keeps the terrain readable for beginners.
     sm.darkness = 0.32;
     (viewer.cesiumWidget.creditContainer as HTMLElement).style.display = 'none';
@@ -115,30 +122,29 @@ export function MoonGlobe(p: Props) {
 
     skyRef.current = new SkySprites(scene);
     scene.preRender.addEventListener(() => skyRef.current?.update());
+    // Signal "ready" once the first view of the Moon has loaded (or after 12 s at the latest), then
+    // fly to the selected site. Showing the whole Moon first makes the app feel instant.
+    let readyFired = false;
+    let sawLoading = false;
+    const fireReady = () => {
+      if (readyFired) return;
+      readyFired = true;
+      document.documentElement.dataset.globe = 'ready';
+      props.current.onReady?.();
+      const f = props.current.focus;
+      if (props.current.mode === 'orbit' && f) flyTo(viewer, f.lat, f.lon);
+    };
+    globe.tileLoadProgressEvent.addEventListener((queued: number) => {
+      if (queued > 0) sawLoading = true;
+      else if (sawLoading) fireReady();
+    });
+    const readyTimer = setTimeout(fireReady, 12_000);
 
     // Start with the whole Moon, tilted to show the south pole.
     viewer.camera.setView({
       destination: Cesium.Cartesian3.fromDegrees(20, -35, 4_200_000, ellipsoid),
       orientation: { heading: 0, pitch: -Cesium.Math.PI_OVER_TWO, roll: 0 },
     });
-
-    // Load LOLA terrain: global first (8 MB), then the detailed south pole (28 MB).
-    let cancelled = false;
-    (async () => {
-      const global = await demLoader.global();
-      if (cancelled) return;
-      demsRef.current = { global };
-      viewer.terrainProvider = createLolaTerrain(demsRef.current);
-      scene.requestRender();
-      setTerrainVersion(1);
-      props.current.onReady?.();
-      const polar = await demLoader.polar();
-      if (cancelled) return;
-      demsRef.current = { global, polar };
-      viewer.terrainProvider = createLolaTerrain(demsRef.current);
-      scene.requestRender();
-      setTerrainVersion(2);
-    })().catch((e) => console.error('Terrain failed to load', e));
 
     // Picking (orbit) and look-around dragging (surface).
     const handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
@@ -174,7 +180,7 @@ export function MoonGlobe(p: Props) {
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
     return () => {
-      cancelled = true;
+      clearTimeout(readyTimer);
       handler.destroy();
       viewer.destroy();
       viewerRef.current = null;
@@ -186,7 +192,21 @@ export function MoonGlobe(p: Props) {
     const viewer = viewerRef.current;
     const s = props.current.surface;
     if (!viewer || !s) return;
-    const ground = demsRef.current ? heightM(demsRef.current, s.lat, s.lon) : 0;
+    const key = `${s.lat},${s.lon}`;
+    if (surfaceGround.current?.key !== key) {
+      // Ask the terrain worker for the ground height, then place the camera.
+      surfaceGround.current = { key, h: NaN };
+      terrain()
+        .heights([[s.lat, s.lon]])
+        .then((h) => {
+          if (surfaceGround.current?.key !== key) return;
+          surfaceGround.current.h = h[0];
+          applySurfaceView();
+        });
+      return;
+    }
+    const ground = surfaceGround.current.h;
+    if (Number.isNaN(ground) || viewerRef.current !== viewer) return;
     viewer.camera.setView({
       destination: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, ground + (props.current.eyeHeightM ?? 12), Cesium.Ellipsoid.MOON),
       orientation: { heading: look.current.heading, pitch: look.current.pitch, roll: 0 },
@@ -202,16 +222,13 @@ export function MoonGlobe(p: Props) {
     const surface = p.mode === 'surface' && p.surface;
     ctl.enableInputs = !surface;
     skyRef.current!.show = !!surface;
+    viewer.shadows = !!surface;
     const frustum = viewer.camera.frustum as Cesium.PerspectiveFrustum;
     frustum.fov = Cesium.Math.toRadians(surface ? 75 : 60);
     if (surface) {
       look.current = { heading: Cesium.Math.toRadians(p.surface!.lookAz), pitch: Cesium.Math.toRadians(4) };
-      // Make sure the detailed terrain is loaded before dropping to eye level.
-      if (!demsRef.current?.polar && p.surface!.lat <= -75) {
-        demLoader.polar().then(() => setTimeout(applySurfaceView, 300));
-      }
       applySurfaceView();
-    } else if (p.focus) {
+    } else if (p.focus && document.documentElement.dataset.globe === 'ready') {
       flyTo(viewer, p.focus.lat, p.focus.lon);
     }
     viewer.scene.requestRender();
@@ -222,6 +239,7 @@ export function MoonGlobe(p: Props) {
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || !p.focus || p.mode !== 'orbit') return;
+    if (document.documentElement.dataset.globe !== 'ready') return; // the ready handler flies there
     flyTo(viewer, p.focus.lat, p.focus.lon);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.focus?.key]);
@@ -241,16 +259,27 @@ export function MoonGlobe(p: Props) {
     viewer.scene.requestRender();
   }, [p.timeMs]);
 
+  // ---- pin heights (from the terrain worker) ----
+  useEffect(() => {
+    let stale = false;
+    terrain()
+      .heights(p.pins.map((x) => [x.lat, x.lon]))
+      .then((h) => !stale && setPinHeights(h));
+    return () => {
+      stale = true;
+    };
+  }, [p.pins]);
+
   // ---- pins ----
   useEffect(() => {
     const viewer = viewerRef.current;
-    if (!viewer) return;
+    if (!viewer || !pinHeights || pinHeights.length !== p.pins.length) return;
     const ents = viewer.entities;
     ents.suspendEvents();
     ents.removeAll();
     const show = p.mode === 'orbit';
-    for (const pin of p.pins) {
-      const h = demsRef.current ? heightM(demsRef.current, pin.lat, pin.lon) : 0;
+    for (const [i, pin] of p.pins.entries()) {
+      const h = pinHeights[i];
       const isScn = pin.kind === 'scenario';
       ents.add({
         id: `pin:${pin.id}`,
@@ -285,7 +314,7 @@ export function MoonGlobe(p: Props) {
     }
     ents.resumeEvents();
     viewer.scene.requestRender();
-  }, [p.pins, p.mode, terrainVersion]);
+  }, [p.pins, p.mode, pinHeights]);
 
   return <div ref={el} className="globe" />;
 }

@@ -1,15 +1,14 @@
 // Converts raw LOLA products (data/raw, from fetch-lola.mjs) into the files the app ships:
-//   public/data/polar240.bin      LDEM_75S_240M as int16 LE (unchanged)
-//   public/data/global8.bin       LDEM_16 averaged 2×2 to 8 px/deg, int16 LE
-//   public/data/polar-shade.png   hillshade of lat ≤ −80°, 480 m/px
-//   public/data/global-shade.png  hillshade of the whole Moon, 4 px/deg
+//   public/data/polar240.lola     LDEM_75S_240M cropped to lat ≤ −77°, compressed
+//   public/data/global8.lola      LDEM_16 averaged 2×2 to 8 px/deg, compressed
 //   src/data/horizons.json        precomputed terrain-horizon masks for catalog sites
 // Usage: node scripts/build-data.ts
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { join } from 'node:path';
-import { PNG } from 'pngjs';
 import { computeHorizon, globalDem, polarSouthDem } from '../src/core/dem.ts';
 import { SITES } from '../src/core/sites.ts';
+import { encodeDem } from '../src/core/demCodec.ts';
 
 const root = join(import.meta.dirname, '..');
 const raw = join(root, 'data', 'raw');
@@ -24,82 +23,38 @@ const load = (f: string) => {
 
 const POLAR_SIZE = 3812;
 const POLAR_SCALE_KM = 0.24;
+const POLAR_CROP_LAT = -77;
 const polarData = load('LDEM_75S_240M.IMG');
 const g16Data = load('LDEM_16.IMG');
 const polar = polarSouthDem(polarData, POLAR_SIZE, POLAR_SCALE_KM, -75);
 const g16 = globalDem(g16Data, 16);
 
-// 1. Browser DEMs
-copyFileSync(join(raw, 'LDEM_75S_240M.IMG'), join(pub, 'polar240.bin'));
+// 1. Browser DEMs, delta-coded + gzipped (.lola, see src/core/demCodec.ts).
+//    Polar: cropped to lat ≤ −77° (the globe and custom-site horizons fall back to the global DEM
+//    beyond that). Global: LDEM_16 averaged 2×2 to 8 px/deg.
+const writeLola = (file: string, data: Int16Array, w: number, h: number) => {
+  const gz = gzipSync(encodeDem(data, w, h), { level: 9 });
+  writeFileSync(join(pub, file), gz);
+  console.log(`${file}: ${w}×${h}, ${(gz.length / 1e6).toFixed(1)} MB`);
+};
 {
-  const w16 = 5760, h16 = 2880, w = 2880, h = 1440;
+  const c0 = (POLAR_SIZE - 1) / 2;
+  const half = Math.ceil((2 * 1737.4 * Math.tan(Math.PI / 4 + (POLAR_CROP_LAT * Math.PI) / 360)) / POLAR_SCALE_KM);
+  const start = c0 + 0.5 - half; // keeps the pole exactly at the centre of the crop
+  const S = 2 * half;
+  const out = new Int16Array(S * S);
+  for (let r = 0; r < S; r++) out.set(polarData.subarray((start + r) * POLAR_SIZE + start, (start + r) * POLAR_SIZE + start + S), r * S);
+  writeLola('polar240.lola', out, S, S);
+}
+{
+  const w16 = 5760, w = 2880, h = 1440;
   const out = new Int16Array(w * h);
   for (let r = 0; r < h; r++)
     for (let c = 0; c < w; c++) {
       const i = 2 * r * w16 + 2 * c;
       out[r * w + c] = Math.round((g16Data[i] + g16Data[i + 1] + g16Data[i + w16] + g16Data[i + w16 + 1]) / 4);
     }
-  writeFileSync(join(pub, 'global8.bin'), Buffer.from(out.buffer));
-  void h16;
-}
-console.log('DEMs written');
-
-// 2. Hillshades (sun from the upper left, 35° up).
-function shadePng(w: number, h: number, heightAt: (c: number, r: number) => number, pixKm: number, file: string) {
-  const png = new PNG({ width: w, height: h });
-  const az = (315 * Math.PI) / 180, alt = (35 * Math.PI) / 180;
-  const lx = Math.sin(az) * Math.cos(alt), ly = Math.cos(az) * Math.cos(alt), lz = Math.sin(alt);
-  for (let r = 0; r < h; r++)
-    for (let c = 0; c < w; c++) {
-      const hc = heightAt(c, r);
-      const o = (r * w + c) * 4;
-      if (Number.isNaN(hc)) {
-        png.data[o + 3] = 0;
-        continue;
-      }
-      const dx = (heightAt(Math.min(c + 1, w - 1), r) - heightAt(Math.max(c - 1, 0), r)) / (2 * pixKm);
-      const dy = (heightAt(c, Math.max(r - 1, 0)) - heightAt(c, Math.min(r + 1, h - 1))) / (2 * pixKm);
-      const nl = Math.hypot(dx, dy, 1);
-      let s = (-dx * lx - dy * ly + lz) / nl;
-      s = Math.max(0, s);
-      // Tint slightly by elevation so highs read warmer than lows.
-      const t = Math.max(0, Math.min(1, (hc + 6) / 14));
-      const v = 30 + 200 * s;
-      png.data[o] = Math.min(255, v * (0.92 + 0.12 * t));
-      png.data[o + 1] = Math.min(255, v * (0.94 + 0.04 * t));
-      png.data[o + 2] = Math.min(255, v * (1.04 - 0.1 * t));
-      png.data[o + 3] = 255;
-    }
-  writeFileSync(join(pub, file), PNG.sync.write(png));
-}
-
-{
-  // Polar: crop to the lat −80° circle, 2× downsample → 480 m/px.
-  const radiusKm = 2 * 1737.4 * Math.tan(Math.PI / 4 + (-80 * Math.PI) / 360);
-  const half = Math.ceil(radiusKm / 0.48);
-  const size = 2 * half;
-  const c0 = (POLAR_SIZE - 1) / 2;
-  const at = (c: number, r: number) => {
-    // map shade pixel → source pixel (centre-aligned)
-    const sc = c0 + (c - half + 0.5) * 2;
-    const sr = c0 + (r - half + 0.5) * 2;
-    const ic = Math.round(sc), ir = Math.round(sr);
-    if (ic < 0 || ir < 0 || ic >= POLAR_SIZE || ir >= POLAR_SIZE) return NaN;
-    return polarData[ir * POLAR_SIZE + ic] * 0.0005;
-  };
-  shadePng(size, size, at, 0.48, 'polar-shade.png');
-  writeFileSync(
-    join(pub, 'polar-shade.json'),
-    JSON.stringify({ size, kmPerPx: 0.48, note: 'Polar stereographic, centre = south pole, lat ≥ −80° edge' }),
-  );
-  console.log(`polar-shade.png ${size}px`);
-}
-{
-  const g4 = load('LDEM_4.IMG');
-  const w = 1440, h = 720;
-  const pixKm = (1737.4 * Math.PI) / 180 / 4;
-  shadePng(w, h, (c, r) => g4[r * w + c] * 0.0005, pixKm, 'global-shade.png');
-  console.log('global-shade.png');
+  writeLola('global8.lola', out, w, h);
 }
 
 // 3. Precomputed horizons for catalog sites (fine polar DEM first, then 16 ppd global).

@@ -1,6 +1,6 @@
 // Middle level: up to four site/date options as cards, with a calendar of good and bad days
 // and a search for a sunnier spot nearby.
-import type { CSSProperties } from 'react';
+import { type CSSProperties, memo } from 'react';
 import {
   COLORS,
   DAY_MS,
@@ -32,7 +32,8 @@ interface Props {
   onResults: (c: Candidate[] | null) => void;
 }
 
-export function Compare(p: Props) {
+// Memoised: the cards don't depend on the time cursor, so playback doesn't re-render them.
+export const Compare = memo(function Compare(p: Props) {
   const { scenarios, tracks, active } = p;
   const update = (i: number, s: Scenario) => p.onScenarios(scenarios.map((x, j) => (j === i ? s : x)));
   const act = scenarios[active];
@@ -165,7 +166,7 @@ export function Compare(p: Props) {
       />
     </div>
   );
-}
+});
 
 function Bar({ label, pct, level, cls }: { label: string; pct: number; level: 'good' | 'ok' | 'poor'; cls: string }) {
   return (

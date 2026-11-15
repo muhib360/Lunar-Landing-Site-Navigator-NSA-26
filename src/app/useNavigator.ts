@@ -1,6 +1,6 @@
 // All app state in one hook: scenarios, settings, time cursor, terrain horizons, tracks.
 // UI components stay simple: they read from this and call its setters.
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Candidate } from '../core/search.ts';
 import { type SiteHorizon, type Track, sampleTrack } from '../core/timeline.ts';
 import {
@@ -65,24 +65,39 @@ export function useNavigator() {
     else if (!r.terrain) status[s.id] = 'loading LOLA terrain…';
   });
 
-  // Tracks are cached by everything that affects them, so rebuilding the list each render is cheap.
-  const tracks: Track[] = resolved.map((r, i) => {
-    const s = scenarios[i];
-    const k = `${r.key}|${r.terrain ? 't' : 's'}|${s.startMs}|${settings.days}|${settings.stepMin}|${settings.commsMarginDeg}`;
-    let tr = trackCache.get(k);
-    if (!tr) {
-      tr = sampleTrack(r.horizon, {
-        startMs: s.startMs,
-        days: settings.days,
-        stepMin: settings.stepMin,
-        mastM: mast,
-        commsMarginDeg: settings.commsMarginDeg,
-      });
-      if (trackCache.size > 60) trackCache.clear();
-      trackCache.set(k, tr);
-    }
-    return tr;
-  });
+  // Tracks are cached by everything that affects them. The list object only changes when a key
+  // changes, so components that don't depend on the time cursor can skip re-rendering.
+  const trackKeys = resolved.map(
+    (r, i) =>
+      `${r.key}|${r.terrain ? 't' : 's'}|${scenarios[i].startMs}|${settings.days}|${settings.stepMin}|${settings.commsMarginDeg}`,
+  );
+  const keySig = trackKeys.join('|');
+  const tracks: Track[] = useMemo(
+    () =>
+      trackKeys.map((k, i) => {
+        let tr = trackCache.get(k);
+        if (!tr) {
+          tr = sampleTrack(resolved[i].horizon, {
+            startMs: scenarios[i].startMs,
+            days: settings.days,
+            stepMin: settings.stepMin,
+            mastM: mast,
+            commsMarginDeg: settings.commsMarginDeg,
+          });
+          if (trackCache.size > 60) trackCache.clear();
+          trackCache.set(k, tr);
+        }
+        return tr;
+      }),
+    // keySig captures every input that changes a track.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [keySig],
+  );
+  const horizons = useMemo(
+    () => resolved.map((r) => r.horizon),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [keySig],
+  );
   const cursor = Math.min(cursorMs, settings.days * DAY_MS);
 
   // Play animation.
@@ -91,13 +106,15 @@ export function useNavigator() {
     let raf = 0;
     let last = performance.now();
     const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
+      // ~30 updates per second is smooth for a time-lapse and halves the rendering work.
+      if (now - last < 32) return;
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       setCursorMs((c) => {
         const n = c + dt * speed * DAY_MS;
         return n > settings.days * DAY_MS ? 0 : n;
       });
-      raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
@@ -110,6 +127,11 @@ export function useNavigator() {
   }, [scenarios, settings, activeIdx]);
 
   const act = scenarios[activeIdx];
+  const actId = act.id;
+  const setCandidates = useCallback(
+    (list: Candidate[] | null) => setSearch(list ? { forId: actId, list } : null),
+    [actId],
+  );
   const updateActive = (fn: (s: Scenario) => Scenario) =>
     setScenarios((list) => list.map((s, i) => (i === activeIdx ? fn(s) : s)));
 
@@ -129,11 +151,11 @@ export function useNavigator() {
     speed,
     setSpeed,
     tracks,
-    horizons: resolved.map((r) => r.horizon),
+    horizons,
     terrainReady: resolved.map((r) => r.terrain),
     status,
     candidates: search?.forId === act.id ? search.list : null,
-    setCandidates: (list: Candidate[] | null) => setSearch(list ? { forId: act.id, list } : null),
+    setCandidates,
     timeMs: act.startMs + cursorMs,
   };
 }

@@ -46,6 +46,11 @@ html, body, #root { height: 100%; margin: 0; background: #000; color: var(--ink)
 .small { font-size: 12px; }
 .eyebrow { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
 
+/* ---- loading state (shown until the 3D Moon has drawn its first view) ---- */
+.globe-loading { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; color: var(--ink-2); font-size: 14px; pointer-events: none; }
+.moon-spinner { width: 110px; height: 110px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #bdbab4, #6d6a66 55%, #2a2927 80%); box-shadow: inset -26px -10px 40px rgba(0, 0, 0, 0.85), 0 0 40px rgba(255, 255, 255, 0.06); animation: moon-pulse 1.6s ease-in-out infinite; }
+@keyframes moon-pulse { 50% { opacity: 0.55; transform: scale(0.97); } }
+
 /* ---- top bar ---- */
 .topbar {
   position: absolute; top: var(--gap); left: var(--gap); right: var(--gap); z-index: 5;

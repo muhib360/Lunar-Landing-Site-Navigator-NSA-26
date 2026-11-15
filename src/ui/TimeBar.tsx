@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { DAY_MS, fmtUtc } from '../app/state.ts';
 import type { Track } from '../core/timeline.ts';
 
@@ -34,16 +34,22 @@ export function TimeBar({ track, cursorMs, days, playing, speed, onCursor, onPla
     return Math.max(0, Math.min(span, ((clientX - r.left) / r.width) * span));
   };
 
-  // Gradient stops from the track (≤ 200 segments).
-  const seg = Math.max(1, Math.floor(n / 200));
-  const sunStops: string[] = [];
-  const earthStops: string[] = [];
-  for (let i = 0; i < n; i += seg) {
-    const x = ((track.times[i] - t0) / span) * 100;
-    const f = track.sunFrac[i];
-    sunStops.push(`rgba(255,201,77,${(0.08 + 0.92 * f).toFixed(2)}) ${x.toFixed(2)}%`);
-    earthStops.push(`${track.earthUp[i] ? 'rgba(94,200,255,0.95)' : 'rgba(94,200,255,0.06)'} ${x.toFixed(2)}%`);
-  }
+  // Gradient strips from the track (≤ 200 segments); rebuilt only when the track changes.
+  const { sunBg, earthBg } = useMemo(() => {
+    const seg = Math.max(1, Math.floor(n / 200));
+    const sunStops: string[] = [];
+    const earthStops: string[] = [];
+    for (let i = 0; i < n; i += seg) {
+      const x = ((track.times[i] - t0) / span) * 100;
+      const f = track.sunFrac[i];
+      sunStops.push(`rgba(255,201,77,${(0.08 + 0.92 * f).toFixed(2)}) ${x.toFixed(2)}%`);
+      earthStops.push(`${track.earthUp[i] ? 'rgba(94,200,255,0.95)' : 'rgba(94,200,255,0.06)'} ${x.toFixed(2)}%`);
+    }
+    return {
+      sunBg: `linear-gradient(90deg, ${sunStops.join(',')})`,
+      earthBg: `linear-gradient(90deg, ${earthStops.join(',')})`,
+    };
+  }, [track, n, t0, span]);
   const ticks = [];
   const every = days <= 14 ? 1 : days <= 60 ? 5 : 30;
   for (let d = 0; d <= days; d += every) ticks.push(d);
@@ -82,8 +88,8 @@ export function TimeBar({ track, cursorMs, days, playing, speed, onCursor, onPla
             if (e.key === 'ArrowLeft') onCursor(Math.max(0, cursorMs - (e.shiftKey ? DAY_MS : DAY_MS / 8)));
           }}
         >
-          <div className="tb-band sun" style={{ background: `linear-gradient(90deg, ${sunStops.join(',')})` }} />
-          <div className="tb-band earth" style={{ background: `linear-gradient(90deg, ${earthStops.join(',')})` }} />
+          <div className="tb-band sun" style={{ background: sunBg }} />
+          <div className="tb-band earth" style={{ background: earthBg }} />
           {ticks.map((d) => (
             <span key={d} className="tb-tick" style={{ left: `${(d / days) * 100}%` }}>
               {d}d

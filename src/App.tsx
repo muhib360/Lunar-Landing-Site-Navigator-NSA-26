@@ -1,14 +1,17 @@
-import { useMemo, useState } from 'react';
+import { Suspense, lazy, useMemo, useState } from 'react';
 import { COLORS, DAY_MS, LABELS, customScenario, scenarioFromSite } from './app/state.ts';
 import { useNavigator } from './app/useNavigator.ts';
 import { SITES } from './core/sites.ts';
-import { type CameraMode, type GlobePin, MoonGlobe } from './globe/MoonGlobe.tsx';
+import type { CameraMode, GlobePin } from './globe/MoonGlobe.tsx';
 import { Compare } from './modes/Compare.tsx';
 import { Explore } from './modes/Explore.tsx';
 import { Expert } from './modes/Expert.tsx';
 import { nowStatus } from './ui/ratings.ts';
 import { TimeBar } from './ui/TimeBar.tsx';
 import { STEPS, Tour, type TourApi } from './ui/Tour.tsx';
+
+// The 3D engine is ~1.5 MB (gzipped): load it after the panels so the app is usable at once.
+const MoonGlobe = lazy(() => import('./globe/MoonGlobe.tsx').then((m) => ({ default: m.MoonGlobe })));
 
 type Mode = 'explore' | 'compare' | 'expert';
 const MODES: { id: Mode; label: string; hint: string }[] = [
@@ -25,6 +28,7 @@ export default function App() {
   const lookAt = (az: number) => setLook((l) => ({ az, n: l.n + 1 }));
   const [tourStep, setTourStep] = useState<number | null>(() => (localStorageGet('tourDone') ? null : 0));
   const [overviewKey, setOverviewKey] = useState(0);
+  const [globeReady, setGlobeReady] = useState(false);
 
   const { act, tracks, active, scenarios, settings } = nav;
   const track = tracks[active];
@@ -90,7 +94,9 @@ export default function App() {
 
   return (
     <div className={`shell mode-${mode} cam-${camera}`}>
-      <MoonGlobe
+      <Suspense fallback={null}>
+        <MoonGlobe
+        onReady={() => setGlobeReady(true)}
         timeMs={nav.timeMs}
         pins={pins}
         focus={{ lat: act.lat, lon: act.lon, key: `${act.id}:${act.lat}:${act.lon}:${overviewKey}` }}
@@ -98,7 +104,14 @@ export default function App() {
         surface={{ lat: act.lat, lon: act.lon, lookAz: look.az, key: `${act.lat}:${act.lon}:${look.n}` }}
         onPickPin={pickPin}
         onPickPoint={(lat, lon) => nav.updateActive((s) => customScenario(+lat.toFixed(4), +lon.toFixed(4), s.startMs, s.id))}
-      />
+        />
+      </Suspense>
+      {!globeReady && (
+        <div className="globe-loading" aria-live="polite">
+          <div className="moon-spinner" />
+          <span>Loading the Moon…</span>
+        </div>
+      )}
 
       <header className="topbar glass">
         <div className="brand">

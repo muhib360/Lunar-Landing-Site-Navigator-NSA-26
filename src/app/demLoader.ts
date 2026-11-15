@@ -1,5 +1,9 @@
-// Shared DEM loader for the main thread, the 3D globe and the search worker.
+// Shared DEM loader for the terrain worker, the search worker and (lazily) the main thread.
 import { type Dem, globalDem, polarSouthDem } from '../core/dem.ts';
+import { decodeDem } from '../core/demCodec.ts';
+
+/** Polar DEM is cropped to this latitude (see scripts/build-data.ts). */
+export const POLAR_EDGE_LAT = -77;
 
 export interface DemLoader {
   /** DEMs to use around a site, fine → coarse. */
@@ -8,22 +12,26 @@ export interface DemLoader {
   global(): Promise<Dem>;
 }
 
+async function fetchLola(url: URL) {
+  const res = await fetch(url);
+  if (!res.ok || !res.body) throw new Error(`${url.pathname}: HTTP ${res.status}`);
+  // Files are gzip-compressed; decompress in the browser (servers don't need special headers).
+  const raw = await new Response(res.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  return decodeDem(raw);
+}
+
 export function makeDemLoader(dataUrl: string): DemLoader {
-  const fetchInt16 = async (file: string) => {
-    const res = await fetch(new URL(file, dataUrl));
-    if (!res.ok) throw new Error(`${file}: HTTP ${res.status}`);
-    return new Int16Array(await res.arrayBuffer());
-  };
   let polarP: Promise<Dem> | null = null;
   let globalP: Promise<Dem> | null = null;
-  const polar = () => (polarP ??= fetchInt16('polar240.bin').then((d) => polarSouthDem(d, 3812, 0.24, -75)));
-  const global = () => (globalP ??= fetchInt16('global8.bin').then((d) => globalDem(d, 8)));
+  const polar = () =>
+    (polarP ??= fetchLola(new URL('polar240.lola', dataUrl)).then((d) => polarSouthDem(d.data, d.width, 0.24, POLAR_EDGE_LAT)));
+  const global = () => (globalP ??= fetchLola(new URL('global8.lola', dataUrl)).then((d) => globalDem(d.data, 8)));
   return {
     polar,
     global,
     async demsFor(lat) {
       const dems: Dem[] = [];
-      if (lat <= -74) dems.push(await polar());
+      if (lat <= POLAR_EDGE_LAT + 1) dems.push(await polar());
       dems.push(await global());
       return dems;
     },
