@@ -24,8 +24,9 @@ export default function App() {
   const nav = useNavigator();
   const [mode, setMode] = useState<Mode>('explore');
   const [camera, setCamera] = useState<CameraMode>('orbit');
-  const [look, setLook] = useState({ az: 0, n: 0 });
-  const lookAt = (az: number) => setLook((l) => ({ az, n: l.n + 1 }));
+  // Where the surface camera should point (azimuth + elevation, deg); n forces a re-aim on each click.
+  const [look, setLook] = useState({ az: 0, el: 0, n: 0 });
+  const lookAt = (az: number, el: number) => setLook((l) => ({ az, el, n: l.n + 1 }));
   const [tourStep, setTourStep] = useState<number | null>(() => (localStorageGet('tourDone') ? null : 0));
   const [overviewKey, setOverviewKey] = useState(0);
   const [globeReady, setGlobeReady] = useState(false);
@@ -35,7 +36,8 @@ export default function App() {
   const now = nowStatus(track, nav.timeMs);
 
   const enterSurface = () => {
-    lookAt(now.sunUp ? now.sunAz : now.earthAz);
+    if (now.sunUp) lookAt(now.sunAz, now.sunEl);
+    else lookAt(now.earthAz, now.earthEl);
     setCamera('surface');
   };
 
@@ -101,7 +103,7 @@ export default function App() {
         pins={pins}
         focus={{ lat: act.lat, lon: act.lon, key: `${act.id}:${act.lat}:${act.lon}:${overviewKey}` }}
         mode={camera}
-        surface={{ lat: act.lat, lon: act.lon, lookAz: look.az, key: `${act.lat}:${act.lon}:${look.n}` }}
+        surface={{ lat: act.lat, lon: act.lon, lookAz: look.az, lookEl: look.el, key: `${act.lat}:${act.lon}:${look.n}` }}
         onPickPin={pickPin}
         onPickPoint={(lat, lon) => nav.updateActive((s) => customScenario(+lat.toFixed(4), +lon.toFixed(4), s.startMs, s.id))}
         />
@@ -211,10 +213,10 @@ export default function App() {
                 <span aria-hidden>🛰️</span> Back to orbit
               </button>
               <div className="look-buttons">
-                <button className="btn" onClick={() => lookAt(now.sunAz)}>
+                <button className="btn" onClick={() => lookAt(now.sunAz, now.sunEl)}>
                   Look at Sun
                 </button>
-                <button className="btn" onClick={() => lookAt(now.earthAz)}>
+                <button className="btn" onClick={() => lookAt(now.earthAz, now.earthEl)}>
                   Look at Earth
                 </button>
               </div>
