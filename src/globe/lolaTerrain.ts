@@ -6,8 +6,12 @@ import { POLAR_EDGE_LAT } from '../app/demLoader.ts';
 import { TILE_N } from './tileMesh.ts';
 import { terrain } from './terrainClient.ts';
 
-const POLAR_MAX_LEVEL = 10; // ~240 m cells
-const GLOBAL_MAX_LEVEL = 6; // ~3.8 km cells
+// Deepest tile level per region. The LOLA data is ~240 m (pole) / ~3.8 km (elsewhere); a few
+// levels beyond that are smooth interpolation, which lets the close-range regolith texture
+// (regolith.ts) and fine shading appear near the camera in "Stand here". Only tiles right around
+// the camera ever reach these levels.
+const POLAR_MAX_LEVEL = 13;
+const GLOBAL_MAX_LEVEL = 12;
 
 /**
  * @param onTile called after each tile arrives from the worker — the viewer uses it to redraw
