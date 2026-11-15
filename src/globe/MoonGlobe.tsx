@@ -49,6 +49,7 @@ export function MoonGlobe(p: Props) {
   const skyRef = useRef<SkySprites | null>(null);
   const look = useRef({ heading: 0, pitch: Cesium.Math.toRadians(4) });
   const surfaceGround = useRef<{ key: string; h: number } | null>(null);
+  const flying = useRef(false);
   const [pinHeights, setPinHeights] = useState<Float64Array | null>(null);
   const props = useRef(p);
   useEffect(() => {
@@ -132,13 +133,31 @@ export function MoonGlobe(p: Props) {
       document.documentElement.dataset.globe = 'ready';
       props.current.onReady?.();
       const f = props.current.focus;
-      if (props.current.mode === 'orbit' && f) flyTo(viewer, f.lat, f.lon);
+      if (props.current.mode === 'orbit' && f) flyTo(viewer, f.lat, f.lon, flying);
     };
     globe.tileLoadProgressEvent.addEventListener((queued: number) => {
       if (queued > 0) sawLoading = true;
       else if (sawLoading) fireReady();
     });
     const readyTimer = setTimeout(fireReady, 12_000);
+
+    // Keep the Moon centred when zooming out: close up the camera may look at the ground at an
+    // angle, but above ~600 km it is turned progressively to look straight at the Moon's centre
+    // (fully by ~2,500 km). Without this, zooming out from a tilted view slides the Moon off-screen.
+    const ctl = scene.screenSpaceCameraController;
+    ctl.maximumZoomDistance = 9_000_000; // don't let the Moon shrink to a dot
+    viewer.camera.percentageChanged = 0.02;
+    viewer.camera.changed.addEventListener(() => {
+      if (props.current.mode !== 'orbit' || flying.current) return;
+      const cam = viewer.camera;
+      const h = cam.positionCartographic.height;
+      const t = Cesium.Math.clamp((h - 600_000) / 1_900_000, 0, 1);
+      if (t === 0) return;
+      const flattest = Cesium.Math.lerp(Cesium.Math.toRadians(-50), -Cesium.Math.PI_OVER_TWO, t);
+      if (cam.pitch <= flattest + 1e-3) return; // already looking down steeply enough
+      cam.setView({ orientation: { heading: cam.heading, pitch: flattest, roll: 0 } });
+      scene.requestRender();
+    });
 
     // Start with the whole Moon, tilted to show the south pole.
     viewer.camera.setView({
@@ -229,7 +248,7 @@ export function MoonGlobe(p: Props) {
       look.current = { heading: Cesium.Math.toRadians(p.surface!.lookAz), pitch: Cesium.Math.toRadians(4) };
       applySurfaceView();
     } else if (p.focus && document.documentElement.dataset.globe === 'ready') {
-      flyTo(viewer, p.focus.lat, p.focus.lon);
+      flyTo(viewer, p.focus.lat, p.focus.lon, flying);
     }
     viewer.scene.requestRender();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -240,7 +259,7 @@ export function MoonGlobe(p: Props) {
     const viewer = viewerRef.current;
     if (!viewer || !p.focus || p.mode !== 'orbit') return;
     if (document.documentElement.dataset.globe !== 'ready') return; // the ready handler flies there
-    flyTo(viewer, p.focus.lat, p.focus.lon);
+    flyTo(viewer, p.focus.lat, p.focus.lon, flying);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.focus?.key]);
 
@@ -319,11 +338,15 @@ export function MoonGlobe(p: Props) {
   return <div ref={el} className="globe" />;
 }
 
-function flyTo(viewer: Cesium.Viewer, lat: number, lon: number) {
+function flyTo(viewer: Cesium.Viewer, lat: number, lon: number, flying: { current: boolean }) {
   const target = Cesium.Cartesian3.fromDegrees(lon, lat, 0, Cesium.Ellipsoid.MOON);
+  flying.current = true;
+  const done = () => (flying.current = false);
   viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(target, 20_000), {
     offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-50), 160_000),
     duration: 2.2,
+    complete: done,
+    cancel: done,
   });
 }
 
